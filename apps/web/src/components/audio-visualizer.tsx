@@ -9,7 +9,7 @@ type VisualizerState = "idle" | "requesting" | "active" | "error";
 interface AudioVisualizerProps {
   /** Called with the latest committed (final) transcript text each time speech
    *  is finalised, and also with the current interim text as the user speaks. */
-  onTranscript?: (text: string) => void;
+  onTranscript?: (text: string, isFinal: boolean) => void;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ export function AudioVisualizer({ onTranscript }: AudioVisualizerProps) {
       // chat input updates in real time as the user speaks.
       const textToEmit = finalSegment || interim;
       if (textToEmit) {
-        onTranscriptRef.current?.(textToEmit);
+        onTranscriptRef.current?.(textToEmit, !!finalSegment);
       }
     };
 

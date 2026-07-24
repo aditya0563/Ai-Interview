@@ -49,21 +49,6 @@ export default function InterviewPage() {
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [chatInput, setChatInput] = useState<string>("");
 
-  /** Populate the chat input with transcribed speech.
-   *  Final results replace any pending interim text; interim results update
-   *  the field in real time so the user can see what's being recognised. */
-  const handleTranscript = useCallback((text: string) => {
-    setChatInput(text);
-  }, []);
-
-  // Scroll anchor for the messages list
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  /** Scroll the message area to the bottom whenever messages change. */
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
   // ── tRPC mutation ────────────────────────────────────────────────────────────
   const submitAnswer = trpc.interviews.submitAnswer.useMutation({
     onSuccess(data) {
@@ -85,6 +70,44 @@ export default function InterviewPage() {
       setMessages((prev) => [...prev, errMessage]);
     },
   });
+
+  /** Populate the chat input with transcribed speech.
+   *  Final results replace any pending interim text; interim results update
+   *  the field in real time so the user can see what's being recognised. */
+  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
+    setChatInput(text);
+
+    if (isFinal && text.trim()) {
+      const trimmed = text.trim();
+      if (submitAnswer.isPending) return;
+
+      // Optimistic update
+      const userMessage: Message = {
+        id: `msg-user-${Date.now()}`,
+        role: "user",
+        content: trimmed,
+      };
+      setMessages((prev) => [...prev, userMessage]);
+      setChatInput("");
+
+      // Call the server
+      submitAnswer.mutate({
+        interviewId: DEMO_INTERVIEW_ID,
+        message: trimmed,
+        code: code ?? "",
+      });
+    }
+  }, [code, submitAnswer]);
+
+  // Scroll anchor for the messages list
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  /** Scroll the message area to the bottom whenever messages change. */
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+
 
   /** Optimistically append the user message then fire the mutation. */
   const handleSend = () => {
@@ -260,10 +283,15 @@ export default function InterviewPage() {
                   >
                     <span className="text-[10px] font-bold text-white">AI</span>
                   </div>
-                  <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-sm bg-gradient-to-br from-violet-900/50 to-indigo-900/30 px-4 py-3 shadow-md">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+                  <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-gradient-to-br from-violet-900/50 to-indigo-900/30 px-4 py-3 shadow-md">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+                    </div>
+                    <span className="text-xs font-medium italic text-violet-300/80">
+                      AI is thinking...
+                    </span>
                   </div>
                 </div>
               )}
