@@ -6,6 +6,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type VisualizerState = "idle" | "requesting" | "active" | "error";
 
+interface AudioVisualizerProps {
+  /** Called with the latest committed (final) transcript text each time speech
+   *  is finalised, and also with the current interim text as the user speaks. */
+  onTranscript?: (text: string) => void;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const FFT_SIZE = 256; // power of 2; gives 128 frequency bins
@@ -78,11 +84,24 @@ function renderFrequencyBars(
   }
 }
 
+/** Returns the browser's SpeechRecognition constructor, or null if unsupported. */
+function getSpeechRecognitionCtor():
+  | typeof SpeechRecognition
+  | null {
+  if (typeof window === "undefined") return null;
+  // Standard or webkit-prefixed
+  return (
+    (window.SpeechRecognition ?? window.webkitSpeechRecognition) ?? null
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function AudioVisualizer() {
+export function AudioVisualizer({ onTranscript }: AudioVisualizerProps) {
   const [state, setState] = useState<VisualizerState>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [interimText, setInterimText] = useState<string>("");
+  const [speechSupported] = useState<boolean>(() => getSpeechRecognitionCtor() !== null);
 
   // All Web Audio objects live in refs — mutations never trigger renders.
   const streamRef = useRef<MediaStream | null>(null);
@@ -91,6 +110,16 @@ export function AudioVisualizer() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Speech recognition ref — kept out of state so mutations are synchronous.
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  // Keep a stable ref to the latest onTranscript callback so the recognition
+  // event handler never goes stale without needing to be restarted.
+  const onTranscriptRef = useRef(onTranscript);
+  useEffect(() => {
+    onTranscriptRef.current = onTranscript;
+  }, [onTranscript]);
 
   // ── rAF drawing loop ─────────────────────────────────────────────────────────
   // All captured values are stable refs — deps array can safely be empty.
@@ -144,6 +173,82 @@ export function AudioVisualizer() {
     }
   }, [state]);
 
+  // ── Speech recognition setup ──────────────────────────────────────────────────
+
+  const startSpeechRecognition = useCallback(() => {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+
+    const recognition = new Ctor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = "";
+      let finalSegment = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (!result) continue;
+        const transcript = result[0]?.transcript ?? "";
+        if (result.isFinal) {
+          finalSegment += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+
+      // Update the live interim display inside the visualizer
+      setInterimText(interim);
+
+      // Fire the callback: prefer final text, fall back to interim so the
+      // chat input updates in real time as the user speaks.
+      const textToEmit = finalSegment || interim;
+      if (textToEmit) {
+        onTranscriptRef.current?.(textToEmit);
+      }
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // "no-speech" is benign — the browser didn't hear anything yet.
+      if (event.error !== "no-speech") {
+        console.warn("[SpeechRecognition] error:", event.error);
+      }
+    };
+
+    // Auto-restart when recognition ends (e.g. silence timeout) while still active
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition && analyserRef.current) {
+        try {
+          recognition.start();
+        } catch {
+          // Ignore InvalidStateError if already started
+        }
+      }
+    };
+
+    try {
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch {
+      // Ignore if already running
+    }
+  }, []); // deps empty — only touches refs and module-level helpers
+
+  const stopSpeechRecognition = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+    // Nullify before stop() so the onend handler won't restart it
+    recognitionRef.current = null;
+    try {
+      recognition.stop();
+    } catch {
+      // Ignore if already stopped
+    }
+    setInterimText("");
+  }, []);
+
   // ── Microphone helpers ────────────────────────────────────────────────────────
 
   const startMicrophone = useCallback(async () => {
@@ -169,6 +274,7 @@ export function AudioVisualizer() {
 
       setState("active");
       startDrawLoop();
+      startSpeechRecognition();
     } catch (err: unknown) {
       const msg =
         err instanceof DOMException
@@ -179,13 +285,15 @@ export function AudioVisualizer() {
       setErrorMsg(msg);
       setState("error");
     }
-  }, [startDrawLoop]);
+  }, [startDrawLoop, startSpeechRecognition]);
 
   const stopMicrophone = useCallback(() => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
+
+    stopSpeechRecognition();
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -198,7 +306,7 @@ export function AudioVisualizer() {
     audioCtxRef.current = null;
 
     setState("idle");
-  }, []);
+  }, [stopSpeechRecognition]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -242,6 +350,13 @@ export function AudioVisualizer() {
             <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-violet-400">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
               Live
+            </span>
+          )}
+
+          {/* Speech-to-text unsupported badge */}
+          {isActive && !speechSupported && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-medium text-amber-400">
+              STT unavailable
             </span>
           )}
         </div>
@@ -325,6 +440,23 @@ export function AudioVisualizer() {
         }
         role="img"
       />
+
+      {/* Live interim transcript */}
+      {isActive && speechSupported && (
+        <div
+          aria-live="polite"
+          aria-label="Live speech transcript"
+          className="min-h-[1.5rem] rounded-lg border border-white/5 bg-white/5 px-3 py-1.5"
+        >
+          {interimText ? (
+            <p className="text-[10px] italic leading-relaxed text-violet-300/70">
+              {interimText}
+            </p>
+          ) : (
+            <p className="text-[10px] text-white/20">Listening…</p>
+          )}
+        </div>
+      )}
 
       {/* Error */}
       {state === "error" && errorMsg && (

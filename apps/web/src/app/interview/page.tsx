@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CodeCanvas } from "@/components/code-canvas";
 import { AudioVisualizer } from "@/components/audio-visualizer";
 import { trpc } from "@/trpc/client";
@@ -48,6 +48,13 @@ export default function InterviewPage() {
   // Chat state
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [chatInput, setChatInput] = useState<string>("");
+
+  /** Populate the chat input with transcribed speech.
+   *  Final results replace any pending interim text; interim results update
+   *  the field in real time so the user can see what's being recognised. */
+  const handleTranscript = useCallback((text: string) => {
+    setChatInput(text);
+  }, []);
 
   // Scroll anchor for the messages list
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -185,7 +192,7 @@ export default function InterviewPage() {
           </div>
 
           {/* Audio Visualizer */}
-          <AudioVisualizer />
+          <AudioVisualizer onTranscript={handleTranscript} />
 
           {/* Chat Panel */}
           <div
