@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CodeCanvas } from "@/components/code-canvas";
+import { trpc } from "@/trpc/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,10 @@ const INITIAL_MESSAGES: Message[] = [
   },
 ];
 
+// Placeholder interview ID used until session management is wired up.
+// Replace this with a real UUID once the create-interview flow exists.
+const DEMO_INTERVIEW_ID = "00000000-0000-0000-0000-000000000001";
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function InterviewPage() {
@@ -51,19 +56,48 @@ export default function InterviewPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  /** Append a new user message and clear the input field. */
+  // ── tRPC mutation ────────────────────────────────────────────────────────────
+  const submitAnswer = trpc.interviews.submitAnswer.useMutation({
+    onSuccess(data) {
+      // Append the AI reply returned from the server
+      const aiMessage: Message = {
+        id: `msg-ai-${Date.now()}`,
+        role: "assistant",
+        content: data.aiResponse,
+      };
+      setMessages((prev) => [...prev, aiMessage]);
+    },
+    onError(err) {
+      // Surface the error as a system-style message in the chat
+      const errMessage: Message = {
+        id: `msg-err-${Date.now()}`,
+        role: "assistant",
+        content: `⚠️ Something went wrong: ${err.message}`,
+      };
+      setMessages((prev) => [...prev, errMessage]);
+    },
+  });
+
+  /** Optimistically append the user message then fire the mutation. */
   const handleSend = () => {
     const trimmed = chatInput.trim();
-    if (!trimmed) return;
+    if (!trimmed || submitAnswer.isPending) return;
 
-    const newMessage: Message = {
-      id: `msg-${Date.now()}`,
+    // Optimistic update
+    const userMessage: Message = {
+      id: `msg-user-${Date.now()}`,
       role: "user",
       content: trimmed,
     };
-
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setChatInput("");
+
+    // Call the server
+    submitAnswer.mutate({
+      interviewId: DEMO_INTERVIEW_ID,
+      message: trimmed,
+      code: code ?? "",
+    });
   };
 
   /** Allow submitting with Enter (Shift+Enter inserts a newline). */
@@ -73,6 +107,8 @@ export default function InterviewPage() {
       handleSend();
     }
   };
+
+  const isBusy = submitAnswer.isPending;
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-[#0f0f13] text-white">
@@ -204,21 +240,39 @@ export default function InterviewPage() {
                 )
               )}
 
+              {/* AI typing indicator while the mutation is in-flight */}
+              {isBusy && (
+                <div className="flex items-start gap-3">
+                  <div
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 shadow-md"
+                    aria-hidden="true"
+                  >
+                    <span className="text-[10px] font-bold text-white">AI</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-sm bg-gradient-to-br from-violet-900/50 to-indigo-900/30 px-4 py-3 shadow-md">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+                  </div>
+                </div>
+              )}
+
               {/* Invisible scroll anchor */}
               <div ref={messagesEndRef} />
             </div>
 
             {/* Chat input */}
             <div className="border-t border-white/10 p-3">
-              <div className="flex items-center gap-2 overflow-hidden rounded-xl border border-white/10 bg-[#1e1e2e] px-4 py-2.5 focus-within:border-violet-500/50 transition-colors">
+              <div className="flex items-center gap-2 overflow-hidden rounded-xl border border-white/10 bg-[#1e1e2e] px-4 py-2.5 transition-colors focus-within:border-violet-500/50">
                 <input
                   id="interview-chat-input"
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Type a message…"
-                  className="flex-1 bg-transparent text-sm text-white/80 placeholder-white/25 outline-none"
+                  placeholder={isBusy ? "AI is thinking…" : "Type a message…"}
+                  disabled={isBusy}
+                  className="flex-1 bg-transparent text-sm text-white/80 placeholder-white/25 outline-none disabled:cursor-not-allowed"
                   aria-label="Chat message input"
                   autoComplete="off"
                 />
@@ -226,28 +280,55 @@ export default function InterviewPage() {
                   id="interview-chat-send"
                   type="button"
                   onClick={handleSend}
-                  disabled={!chatInput.trim()}
+                  disabled={!chatInput.trim() || isBusy}
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-white shadow-md shadow-violet-600/30 transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
                   aria-label="Send message"
                 >
-                  <svg
-                    className="h-3.5 w-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                    />
-                  </svg>
+                  {isBusy ? (
+                    <svg
+                      className="h-3.5 w-3.5 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                      />
+                    </svg>
+                  ) : (
+                    <svg
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                      />
+                    </svg>
+                  )}
                 </button>
               </div>
               <p className="mt-1.5 px-1 text-[10px] text-white/20">
-                Press <kbd className="rounded bg-white/10 px-1 py-0.5 font-mono text-[10px]">Enter</kbd> to send
+                Press{" "}
+                <kbd className="rounded bg-white/10 px-1 py-0.5 font-mono text-[10px]">
+                  Enter
+                </kbd>{" "}
+                to send
               </p>
             </div>
           </div>

@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@repo/database": "workspace:*",
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.41.0",
