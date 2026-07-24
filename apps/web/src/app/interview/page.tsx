@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CodeCanvas } from "@/components/code-canvas";
+import { AudioVisualizer } from "@/components/audio-visualizer";
 import { trpc } from "@/trpc/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -182,6 +183,9 @@ export default function InterviewPage() {
               </div>
             </div>
           </div>
+
+          {/* Audio Visualizer */}
+          <AudioVisualizer />
 
           {/* Chat Panel */}
           <div
