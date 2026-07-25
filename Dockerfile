@@ -8,7 +8,7 @@ RUN apk update && apk add --no-cache libc6-compat
 WORKDIR /app
 RUN npm install -g turbo
 COPY . .
-RUN turbo prune web --docker
+RUN turbo prune @repo/web --docker
 
 FROM base AS builder
 RUN apk update && apk add --no-cache libc6-compat
@@ -22,7 +22,7 @@ RUN pnpm install --frozen-lockfile
 # Build the project
 COPY --from=pruner /app/out/full/ .
 COPY turbo.json turbo.json
-RUN pnpm turbo run build --filter=web...
+RUN pnpm turbo run build --filter=@repo/web...
 
 FROM base AS runner
 WORKDIR /app
