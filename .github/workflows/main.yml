@@ -38,7 +38,7 @@ jobs:
         run: pnpm lint
 
       - name: TypeScript Validation
-        run: pnpm -r exec tsc --noEmit
+        run: pnpm -r --filter=!@repo/typescript-config exec tsc --noEmit
 
   cd:
     name: Continuous Deployment

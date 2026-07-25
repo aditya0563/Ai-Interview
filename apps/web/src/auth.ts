@@ -21,13 +21,6 @@ declare module "next-auth" {
   }
 }
 
-declare module "next-auth/jwt" {
-  interface JWT {
-    id: string;
-    role: "user" | "admin";
-  }
-}
-
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   adapter: DrizzleAdapter(db, {
@@ -64,8 +57,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
      */
     session({ session, token }) {
       if (token) {
-        session.user.id = token.id;
-        session.user.role = token.role;
+        session.user.id = typeof token.id === "string" ? token.id : "";
+        session.user.role = token.role === "admin" ? "admin" : "user";
       }
       return session;
     },
