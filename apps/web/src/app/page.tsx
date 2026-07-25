@@ -1,82 +1,72 @@
-"use client";
-
 import Link from "next/link";
-import { Button, Card, CardHeader, CardBody } from "@repo/ui";
-import { trpc } from "@/trpc/client";
+import { auth, signIn, signOut } from "../auth";
 
-export default function Home() {
-  const { data: users, isLoading, error } = trpc.users.list.useQuery();
+export default async function Home() {
+  // Fetch the active server session
+  const session = await auth();
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-zinc-50 p-8 dark:bg-zinc-950">
-      <div className="w-full max-w-2xl space-y-6">
-        <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-black text-white p-4">
+      <div className="flex flex-col items-center gap-8 z-10 text-center">
+        
+        <div className="space-y-4">
+          <h1 className="text-5xl font-bold tracking-tight sm:text-7xl">
             Interview AI
           </h1>
-          <p className="mt-2 text-zinc-500 dark:text-zinc-400">
-            Turborepo · Next.js 15 · tRPC · Drizzle ORM · PostgreSQL
+          <p className="text-gray-400 max-w-xl mx-auto">
+            Turborepo · Next.js 16 · tRPC · Drizzle ORM · PostgreSQL · Auth.js
           </p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
-              tRPC → Drizzle → PostgreSQL
-            </h2>
-            <p className="text-sm text-zinc-500">
-              Live query via <code className="font-mono text-xs">trpc.users.list.useQuery()</code>
-            </p>
-          </CardHeader>
-          <CardBody>
-            {isLoading && (
-              <p className="text-sm text-zinc-400 animate-pulse">
-                Loading users…
+        {/* Authentication State UI */}
+        <div className="flex flex-col items-center gap-4 mt-8">
+          {session ? (
+            <>
+              <p className="text-sm text-gray-300">
+                Signed in as <span className="font-semibold text-white">{session.user?.name}</span>
               </p>
-            )}
-            {error && (
-              <div className="rounded-md bg-red-50 p-4 dark:bg-red-950">
-                <p className="text-sm font-medium text-red-700 dark:text-red-300">
-                  Database not connected
-                </p>
-                <p className="mt-1 text-xs text-red-500">
-                  Set <code className="font-mono">DATABASE_URL</code> in your .env and run{" "}
-                  <code className="font-mono">pnpm db:push</code>
-                </p>
+              <div className="flex gap-4">
+                <Link 
+                  href="/interview" 
+                  className="px-6 py-2 rounded-md bg-white text-black font-medium hover:bg-gray-200 transition-colors"
+                >
+                  Enter Interview Room
+                </Link>
+                <form
+                  action={async () => {
+                    "use server";
+                    await signOut();
+                  }}
+                >
+                  <button 
+                    type="submit"
+                    className="px-6 py-2 rounded-md border border-gray-600 hover:bg-gray-800 transition-colors"
+                  >
+                    Sign Out
+                  </button>
+                </form>
               </div>
-            )}
-            {users && users.length === 0 && (
-              <p className="text-sm text-zinc-500">
-                No users yet — run <code className="font-mono text-xs">pnpm db:push</code> and insert a row.
-              </p>
-            )}
-            {users && users.length > 0 && (
-              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {users.map((user) => (
-                  <li key={user.id} className="py-2">
-                    <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-                      {user.name ?? "(no name)"}
-                    </p>
-                    <p className="text-xs text-zinc-400">{user.email}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardBody>
-        </Card>
-
-        <div className="flex gap-3 justify-center">
-          <Link href="/interview">
-            <Button variant="primary" size="md">
-              Get Started
-            </Button>
-          </Link>
-          <Link href="https://nextjs.org/docs" target="_blank" rel="noopener noreferrer">
-            <Button variant="secondary" size="md">
-              Documentation
-            </Button>
-          </Link>
+            </>
+          ) : (
+            <form
+              action={async () => {
+                "use server";
+                await signIn("github", { redirectTo: "/interview" });
+              }}
+            >
+              <button 
+                type="submit"
+                className="px-8 py-3 rounded-md bg-white text-black font-semibold hover:bg-gray-200 transition-colors flex items-center gap-2"
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                </svg>
+                Sign in with GitHub
+              </button>
+            </form>
+          )}
         </div>
+
       </div>
     </main>
   );

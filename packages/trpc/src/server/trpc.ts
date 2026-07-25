@@ -27,8 +27,30 @@ const t = initTRPC.context<Context>().create();
 export const router = t.router;
 export const createCallerFactory = t.createCallerFactory;
 
+// ─── Logger Middleware ─────────────────────────────────────────────────────────
+
+const loggerMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
+  const start = performance.now();
+  const result = await next();
+  const end = performance.now();
+  const durationMs = end - start;
+
+  const logData = {
+    severity: durationMs > 1500 ? "WARN" : "INFO",
+    path,
+    type,
+    status: result.ok ? "ok" : "error",
+    durationMs: Number(durationMs.toFixed(2)),
+    userId: ctx.session?.user.id,
+  };
+
+  console.log(JSON.stringify(logData));
+
+  return result;
+});
+
 /** Open to everyone — no auth required. */
-export const publicProcedure = t.procedure;
+export const publicProcedure = t.procedure.use(loggerMiddleware);
 
 // ─── Auth Middleware ───────────────────────────────────────────────────────────
 
