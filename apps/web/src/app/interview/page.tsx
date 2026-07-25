@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CodeCanvas } from "@/components/code-canvas";
 import { AudioVisualizer } from "@/components/audio-visualizer";
+import { useAudioRecorder } from "@/hooks/use-audio-recorder";
 import { trpc } from "@/trpc/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -42,6 +43,8 @@ const DEMO_INTERVIEW_ID = "00000000-0000-0000-0000-000000000001";
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function InterviewPage() {
+  const { isRecording, stream, error: micError, startRecording, stopRecording } = useAudioRecorder();
+
   // Code editor state
   const [code, setCode] = useState<string | undefined>(STARTER_CODE);
 
@@ -184,6 +187,59 @@ export default function InterviewPage() {
           className="flex flex-col gap-4 overflow-hidden"
           aria-label="Chat and video panel"
         >
+          {/* Control Panel */}
+          <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-[#13131a] p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isRecording ? 'bg-green-500/20 text-green-400' : 'bg-white/5 text-white/40'}`}>
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 3a4 4 0 014 4v4a4 4 0 01-8 0V7a4 4 0 014-4z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold tracking-wide text-white/90">
+                    Interview Session
+                  </h3>
+                  <p className="text-[10px] text-white/40">
+                    {isRecording ? "Recording active" : "Ready to start"}
+                  </p>
+                </div>
+              </div>
+              
+              {!isRecording ? (
+                <button
+                  onClick={startRecording}
+                  className="group relative overflow-hidden rounded-lg bg-violet-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all hover:scale-105 hover:bg-violet-500 active:scale-95"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:animate-[shimmer_1.5s_infinite]" />
+                  <span className="relative flex items-center gap-2">
+                    Start Interview
+                  </span>
+                </button>
+              ) : (
+                <button
+                  onClick={stopRecording}
+                  className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-5 py-2 text-xs font-semibold text-red-400 shadow-md transition-all hover:scale-105 hover:bg-red-500/20 active:scale-95"
+                >
+                  <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                  End Interview
+                </button>
+              )}
+            </div>
+
+            {micError && (
+              <div className="mt-1 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400 shadow-sm">
+                <div className="flex items-center gap-2 font-semibold">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  Microphone Error
+                </div>
+                <p className="mt-1 opacity-80">{micError}</p>
+              </div>
+            )}
+          </div>
+
           {/* Video Placeholder */}
           <div
             className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-gradient-to-br from-violet-900/30 via-[#1a1a2e] to-indigo-900/30 shadow-xl"
@@ -215,7 +271,7 @@ export default function InterviewPage() {
           </div>
 
           {/* Audio Visualizer */}
-          <AudioVisualizer onTranscript={handleTranscript} />
+          <AudioVisualizer stream={stream} onTranscript={handleTranscript} />
 
           {/* Chat Panel */}
           <div
