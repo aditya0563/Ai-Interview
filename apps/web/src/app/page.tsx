@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Button, Card, CardHeader, CardBody } from "@repo/ui";
 import { trpc } from "@/trpc/client";
 
@@ -65,12 +66,16 @@ export default function Home() {
         </Card>
 
         <div className="flex gap-3 justify-center">
-          <Button variant="primary" size="md">
-            Get Started
-          </Button>
-          <Button variant="secondary" size="md">
-            Documentation
-          </Button>
+          <Link href="/interview">
+            <Button variant="primary" size="md">
+              Get Started
+            </Button>
+          </Link>
+          <Link href="https://nextjs.org/docs" target="_blank" rel="noopener noreferrer">
+            <Button variant="secondary" size="md">
+              Documentation
+            </Button>
+          </Link>
         </div>
       </div>
     </main>
