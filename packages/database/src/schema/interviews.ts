@@ -5,7 +5,7 @@ export const statusEnum = pgEnum("status", ["active", "completed"]);
 
 export const interviews = pgTable("interviews", {
   id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   jobRole: text("job_role").notNull(),
