@@ -231,19 +231,19 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
       <div className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-2">
           <svg
-            className={\`h-3.5 w-3.5 transition-colors \${stream ? "text-violet-400" : "text-white/30"}\`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 3a4 4 0 014 4v4a4 4 0 01-8 0V7a4 4 0 014-4z"
-            />
-          </svg>
+  className={`h-3.5 w-3.5 transition-colors ${stream ? "text-violet-400" : "text-white/30"}`}
+  fill="none"
+  stroke="currentColor"
+  viewBox="0 0 24 24"
+  aria-hidden="true"
+>
+  <path
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    strokeWidth={2}
+    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 3a4 4 0 014 4v4a4 4 0 01-8 0V7a4 4 0 018 0z"
+  />
+</svg>
           <span className="text-[10px] font-semibold uppercase tracking-widest text-white/40">
             Mic Visualizer
           </span>
