@@ -4,7 +4,7 @@ import GitHub from "next-auth/providers/github";
 /**
  * Edge-compatible Auth.js configuration.
  * Must NOT import any Node.js-only modules (e.g. drizzle, postgres).
- * Used by both auth.ts (full server) and middleware.ts (Edge runtime).
+ * Used by both auth.ts (full server) and proxy.ts (Edge runtime).
  */
 export const authConfig: NextAuthConfig = {
   providers: [GitHub],
@@ -13,10 +13,6 @@ export const authConfig: NextAuthConfig = {
     signIn: "/",
   },
   callbacks: {
-    /**
-     * Controls whether a user is allowed to access a page via middleware.
-     * The full jwt/session callbacks run in auth.ts (Node runtime).
-     */
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const isOnInterview = nextUrl.pathname.startsWith("/interview");
@@ -32,3 +28,6 @@ export const authConfig: NextAuthConfig = {
     },
   },
 };
+
+// Added default export so both named and default imports work seamlessly
+export default authConfig;
