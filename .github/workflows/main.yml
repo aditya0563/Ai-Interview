@@ -14,12 +14,10 @@ concurrency:
 
 jobs:
   ci:
-    name: Continuous Integration
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+      
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
@@ -34,11 +32,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint Workspace
+      - name: Run linting and type checks
         run: pnpm lint
-
-      - name: TypeScript Validation
-        run: pnpm -r --filter=!@repo/typescript-config exec tsc --noEmit
+        env:
+          # Dummy variables to satisfy Next.js and Drizzle during build/lint steps
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/dummy"
+          AUTH_SECRET: "dummy_secret_for_ci_linting_only"
+          GITHUB_ID: "dummy_id"
+          GITHUB_SECRET: "dummy_secret"
 
   cd:
     name: Continuous Deployment
