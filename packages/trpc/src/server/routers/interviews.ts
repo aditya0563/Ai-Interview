@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { interviews } from "@repo/database";
-import { protectedProcedure, router } from "../trpc";
+import { aiProcedure, protectedProcedure, router } from "../trpc";
 import { generateInterviewResponse } from "../services/ai";
 
 export const interviewsRouter = router({
@@ -115,7 +115,7 @@ export const interviewsRouter = router({
    * calls Gemini to generate the next interviewer question, persists that too,
    * and returns the AI response text plus the updated interview row.
    */
-  submitAnswer: protectedProcedure
+  submitAnswer: aiProcedure
     .input(
       z.object({
         interviewId: z.string().uuid(),
