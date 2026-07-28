@@ -1,4 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
+import { Redis } from "@upstash/redis";
+import { Ratelimit } from "@upstash/ratelimit";
 import type { DB } from "@repo/database";
 
 // ─── Session Types ─────────────────────────────────────────────────────────────
@@ -101,3 +103,52 @@ export const protectedProcedure = t.procedure.use(isAuthed);
 
 /** Requires the authenticated user to have role = "admin". Throws FORBIDDEN otherwise. */
 export const adminProcedure = t.procedure.use(isAdmin);
+
+// ─── Upstash Redis & Rate Limiter ──────────────────────────────────────────────
+
+const redis = Redis.fromEnv();
+
+/**
+ * Sliding-window rate limiter: 5 requests per 10 seconds per user.
+ * Protects metered Gemini AI endpoints from Denial-of-Wallet attacks.
+ */
+const aiRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(5, "10 s"),
+  analytics: true,
+  prefix: "ratelimit:ai",
+});
+
+// ─── Rate Limiting Middleware ──────────────────────────────────────────────────
+
+/**
+ * Must be chained AFTER isAuthed so the context is already narrowed:
+ * ctx.session.user.id is guaranteed to be a non-nullable string here.
+ */
+const isRateLimited = t.middleware(async ({ ctx, next }) => {
+  // Type is narrowed by the preceding isAuthed middleware —
+  // no optional chaining or non-null assertions required.
+  const identifier = (ctx as { session: { user: { id: string } } }).session
+    .user.id;
+
+  const { success } = await aiRatelimit.limit(identifier);
+
+  if (!success) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message:
+        "Rate limit exceeded for AI requests. Please slow down.",
+    });
+  }
+
+  return next();
+});
+
+// ─── AI Procedure ──────────────────────────────────────────────────────────────
+
+/**
+ * Requires an authenticated session AND passes the per-user sliding-window
+ * rate limit (5 req / 10 s). Use this for every Gemini-backed endpoint.
+ */
+export const aiProcedure = protectedProcedure.use(isRateLimited);
+

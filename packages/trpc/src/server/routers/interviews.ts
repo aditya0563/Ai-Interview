@@ -9,7 +9,7 @@ export const interviewsRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        jobRole: z.string().min(1),
+        jobRole: z.string().trim().min(1).max(1000),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -52,8 +52,8 @@ export const interviewsRouter = router({
       z.object({
         interviewId: z.string().uuid(),
         message: z.object({
-          role: z.string(),
-          content: z.string(),
+          role: z.string().trim(),
+          content: z.string().trim().max(1000),
         }),
       })
     )
@@ -119,8 +119,8 @@ export const interviewsRouter = router({
     .input(
       z.object({
         interviewId: z.string().uuid(),
-        message: z.string().min(1, "Message cannot be empty"),
-        code: z.string(),
+        message: z.string().trim().min(1, "Message cannot be empty").max(1000),
+        code: z.string().trim().max(10000),
       })
     )
     .mutation(async ({ ctx, input }) => {

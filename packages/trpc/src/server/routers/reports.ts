@@ -12,9 +12,9 @@ export const reportsRouter = router({
         overallScore: z.number().int().min(0).max(100),
         technicalScore: z.number().int().min(0).max(100),
         communicationScore: z.number().int().min(0).max(100),
-        strengths: z.array(z.string()),
-        improvements: z.array(z.string()),
-        detailedFeedback: z.string().min(1),
+        strengths: z.array(z.string().trim().max(1000)),
+        improvements: z.array(z.string().trim().max(1000)),
+        detailedFeedback: z.string().trim().min(1).max(1000),
       })
     )
     .mutation(async ({ ctx, input }) => {
