@@ -19,11 +19,19 @@ export const authConfig: NextAuthConfig = {
       const isOnAdmin = nextUrl.pathname.startsWith("/admin");
 
       if (isOnAdmin) {
-        return isLoggedIn && (auth?.user as { role?: string })?.role === "admin";
+        if (!isLoggedIn) return false;
+        const role = (auth.user as { role?: string })?.role;
+        if (role !== "admin") {
+          return Response.redirect(new URL("/", nextUrl));
+        }
+        return true;
       }
+
       if (isOnInterview) {
-        return isLoggedIn;
+        if (!isLoggedIn) return false;
+        return true;
       }
+
       return true;
     },
   },
