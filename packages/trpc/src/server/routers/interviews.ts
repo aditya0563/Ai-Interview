@@ -1,37 +1,53 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { interviews } from "@repo/database";
-import { publicProcedure, router } from "../trpc";
+import { protectedProcedure, router } from "../trpc";
 import { generateInterviewResponse } from "../services/ai";
 
 export const interviewsRouter = router({
-  create: publicProcedure
+  create: protectedProcedure
     .input(
       z.object({
-        userId: z.string().uuid(),
         jobRole: z.string().min(1),
       })
     )
-    .mutation(({ ctx, input }) => {
-      return ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .insert(interviews)
         .values({
-          userId: input.userId,
+          userId: ctx.session.user.id,
           jobRole: input.jobRole,
         })
         .returning();
+        
+      return rows;
     }),
 
-  getById: publicProcedure
+  getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(({ ctx, input }) => {
-      return ctx.db
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .select()
         .from(interviews)
-        .where(eq(interviews.id, input.id));
+        .where(
+          and(
+            eq(interviews.id, input.id),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        );
+
+      if (rows.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
+
+      return rows;
     }),
 
-  addTranscriptMessage: publicProcedure
+  addTranscriptMessage: protectedProcedure
     .input(
       z.object({
         interviewId: z.string().uuid(),
@@ -41,30 +57,57 @@ export const interviewsRouter = router({
         }),
       })
     )
-    .mutation(({ ctx, input }) => {
-      return ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .update(interviews)
         .set({
-          // Append to the jsonb array using PostgreSQL's || operator
           transcript: sql`${interviews.transcript} || ${JSON.stringify([input.message])}::jsonb`,
         })
-        .where(eq(interviews.id, input.interviewId))
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        )
         .returning();
+
+      if (rows.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
+
+      return rows;
     }),
 
-  updateStatus: publicProcedure
+  updateStatus: protectedProcedure
     .input(
       z.object({
         interviewId: z.string().uuid(),
         status: z.enum(["active", "completed"]),
       })
     )
-    .mutation(({ ctx, input }) => {
-      return ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .update(interviews)
         .set({ status: input.status })
-        .where(eq(interviews.id, input.interviewId))
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        )
         .returning();
+
+      if (rows.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
+
+      return rows;
     }),
 
   /**
@@ -72,7 +115,7 @@ export const interviewsRouter = router({
    * calls Gemini to generate the next interviewer question, persists that too,
    * and returns the AI response text plus the updated interview row.
    */
-  submitAnswer: publicProcedure
+  submitAnswer: protectedProcedure
     .input(
       z.object({
         interviewId: z.string().uuid(),
@@ -85,10 +128,18 @@ export const interviewsRouter = router({
       const rows = await ctx.db
         .select()
         .from(interviews)
-        .where(eq(interviews.id, input.interviewId));
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        );
 
       if (rows.length === 0) {
-        throw new Error(`Interview not found: ${input.interviewId}`);
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
       }
 
       const interview = rows[0]!;
@@ -97,12 +148,25 @@ export const interviewsRouter = router({
       const userMessage = { role: "user", content: input.message };
 
       // 3. Append the user message to the DB transcript
-      await ctx.db
+      const update1 = await ctx.db
         .update(interviews)
         .set({
           transcript: sql`${interviews.transcript} || ${JSON.stringify([userMessage])}::jsonb`,
         })
-        .where(eq(interviews.id, input.interviewId));
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        )
+        .returning();
+
+      if (update1.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
 
       // 4. Generate the AI follow-up using the full transcript (including the
       //    new user message) and the live code snapshot
@@ -117,17 +181,29 @@ export const interviewsRouter = router({
       const assistantMessage = { role: "assistant", content: aiText };
 
       // 6. Append the AI message and return the final interview row
-      const [updatedInterview] = await ctx.db
+      const finalUpdate = await ctx.db
         .update(interviews)
         .set({
           transcript: sql`${interviews.transcript} || ${JSON.stringify([assistantMessage])}::jsonb`,
         })
-        .where(eq(interviews.id, input.interviewId))
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        )
         .returning();
+
+      if (finalUpdate.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
 
       return {
         aiResponse: aiText,
-        interview: updatedInterview!,
+        interview: finalUpdate[0]!,
       };
     }),
 });

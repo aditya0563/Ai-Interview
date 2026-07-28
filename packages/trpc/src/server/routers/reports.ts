@@ -1,10 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { reports } from "@repo/database";
-import { publicProcedure, router } from "../trpc";
+import { reports, interviews } from "@repo/database";
+import { protectedProcedure, router } from "../trpc";
 
 export const reportsRouter = router({
-  create: publicProcedure
+  create: protectedProcedure
     .input(
       z.object({
         interviewId: z.string().uuid(),
@@ -16,8 +17,25 @@ export const reportsRouter = router({
         detailedFeedback: z.string().min(1),
       })
     )
-    .mutation(({ ctx, input }) => {
-      return ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const interviewRows = await ctx.db
+        .select({ id: interviews.id })
+        .from(interviews)
+        .where(
+          and(
+            eq(interviews.id, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        );
+
+      if (interviewRows.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
+
+      const rows = await ctx.db
         .insert(reports)
         .values({
           interviewId: input.interviewId,
@@ -29,14 +47,31 @@ export const reportsRouter = router({
           detailedFeedback: input.detailedFeedback,
         })
         .returning();
+
+      return rows;
     }),
 
-  getByInterviewId: publicProcedure
+  getByInterviewId: protectedProcedure
     .input(z.object({ interviewId: z.string().uuid() }))
-    .query(({ ctx, input }) => {
-      return ctx.db
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .select()
         .from(reports)
-        .where(eq(reports.interviewId, input.interviewId));
+        .innerJoin(interviews, eq(reports.interviewId, interviews.id))
+        .where(
+          and(
+            eq(reports.interviewId, input.interviewId),
+            eq(interviews.userId, ctx.session.user.id)
+          )
+        );
+
+      if (rows.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        });
+      }
+
+      return rows.map((row) => row.reports);
     }),
 });
