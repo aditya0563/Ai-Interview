@@ -28,3 +28,6 @@ Thumbs.db
 # Editors
 .vscode/
 .idea/
+
+# Local scratchpad (temporary files, experiments — never commit)
+.scratch/
