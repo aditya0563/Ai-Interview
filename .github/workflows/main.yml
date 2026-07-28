@@ -1,56 +1,395 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# interview-ai — CI/CD Pipeline
+#
+# ┌─────────────────────────────────────────────────────────────────┐
+# │  Trigger: pull_request → main   │   push → main                │
+# ├────────────────┬────────────────┬────────────────────────────── ┤
+# │  test-unit     │  test-e2e      │  (parallel, no dependency)    │
+# │  (Vitest +     │  (Playwright + │                               │
+# │  PostgreSQL)   │  Next.js dev)  │                               │
+# └────────────────┴────────────────┴──────────────┬────────────────┘
+#                                                  │ needs: [test-unit, test-e2e]
+#                                                  ▼
+#                                            cd (push → main only)
+#                                       Docker build + push to Hub
+#
+# Cache layers:
+#   1. pnpm store           — keyed on pnpm-lock.yaml hash
+#   2. Turborepo local      — keyed on turbo.json + full source hash
+#   3. Playwright browsers  — keyed on @playwright/test exact version
+#
+# Coverage enforcement: Vitest thresholds in each vitest.config.ts exit
+# non-zero on breach → step fails → PR blocked. No external action needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
 name: CI/CD Pipeline
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
+# Cancel in-progress runs for the same ref when a new commit arrives.
+# On push-to-main we let runs complete so deployment isn't interrupted mid-fly.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-jobs:
-  ci:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
+# ─── Shared env across all jobs ──────────────────────────────────────────────
+env:
+  # Must match `packageManager` in root package.json exactly.
+  PNPM_VERSION: "9.0.0"
+  # Turborepo Remote Cache credentials (set in repo → Settings → Secrets).
+  # When absent, Turbo falls back to the local .turbo filesystem cache below.
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+  NEXT_TELEMETRY_DISABLED: "1"
 
-      - name: Setup Node.js
+# ═════════════════════════════════════════════════════════════════════════════
+# REUSABLE COMPOSITE — pnpm + Node bootstrap steps
+# (Defined inline per job; GH Actions composite actions can't share steps
+#  across jobs without a separate action file, so we duplicate the small set.)
+# ═════════════════════════════════════════════════════════════════════════════
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Unit & Integration Tests
+  # ═══════════════════════════════════════════════════════════════════════════
+  test-unit:
+    name: "Unit & Integration Tests"
+    runs-on: ubuntu-24.04
+
+    # ── PostgreSQL service container ─────────────────────────────────────────
+    # Required exclusively by packages/database/src/schema/schema.test.ts.
+    # The test resolves: DATABASE_TEST_URL ?? DATABASE_URL.
+    # We expose port 5432 from the container to the runner's localhost so the
+    # Vitest process (which runs on the host, not inside Docker) can reach it
+    # via postgresql://ci:ci@localhost:5432/ci_test.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history allows Turborepo affected-package detection when
+          # TURBO_TOKEN is configured for remote caching.
+          fetch-depth: 0
+
+      # ── 2. Node.js ────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'pnpm'
+          node-version: "20"
 
+      # ── 3. pnpm ───────────────────────────────────────────────────────────
+      - name: Set up pnpm ${{ env.PNPM_VERSION }}
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      # ── 4. pnpm store cache ───────────────────────────────────────────────
+      # Cache the global pnpm content-addressable store. Restoring it avoids
+      # re-downloading packages on lockfile-stable runs.
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          # Cache is busted only when pnpm-lock.yaml changes.
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      # ── 5. Install all workspace dependencies ─────────────────────────────
+      # --frozen-lockfile hard-fails if any package.json/lockfile drift
+      # exists — catches forgotten `pnpm install` commits immediately.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run linting and type checks
-        run: pnpm lint
-        env:
-          # Dummy variables to satisfy Next.js and Drizzle during build/lint steps
-          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/dummy"
-          AUTH_SECRET: "dummy_secret_for_ci_linting_only"
-          GITHUB_ID: "dummy_id"
-          GITHUB_SECRET: "dummy_secret"
+      # ── 6. Turborepo local cache ──────────────────────────────────────────
+      # Caches the .turbo directory (task output hashes) so unchanged
+      # workspaces are replayed from cache rather than rebuilt or re-tested.
+      # The key includes every TS/JSON source file so any code change busts it.
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-unit-${{ runner.os }}-${{ hashFiles('turbo.json') }}-${{ hashFiles('**/*.ts', '**/*.tsx', '**/*.json', '!**/node_modules/**', '!**/.next/**') }}
+          restore-keys: |
+            turbo-unit-${{ runner.os }}-${{ hashFiles('turbo.json') }}-
+            turbo-unit-${{ runner.os }}-
 
+      # ── 7. Apply database schema ──────────────────────────────────────────
+      # `drizzle-kit push --force` creates or alters all tables in the
+      # ephemeral CI database to match the Drizzle schema source exactly.
+      # This runs before tests so the schema is always current without
+      # maintaining a separate migration-runner step.
+      - name: Apply database schema (drizzle-kit push)
+        working-directory: packages/database
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci_test
+        run: pnpm db:push --force
+
+      # ── 8. Build all packages (turbo run build) ───────────────────────────
+      # Builds in dependency order per the Turbo DAG.
+      # The `test` task `dependsOn: ["^build"]` makes this redundant when
+      # using `turbo run test` directly, but running it explicitly gives us
+      # a clean, named step in the Actions log for easier debugging.
+      - name: Build (turbo run build)
+        run: pnpm build
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci_test
+          GEMINI_API_KEY: "ci-stub-gemini-key"
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          AUTH_GITHUB_ID: ${{ secrets.AUTH_GITHUB_ID }}
+          AUTH_GITHUB_SECRET: ${{ secrets.AUTH_GITHUB_SECRET }}
+
+      # ── 9. Run unit + integration tests with coverage ─────────────────────
+      # `turbo run test` fans out to all four workspaces in parallel via
+      # Turbo's scheduler. Each workspace's vitest.config.ts enforces its own
+      # per-package coverage thresholds:
+      #
+      #   @repo/trpc     — lines/functions/statements ≥ 80%, branches ≥ 70%
+      #   @repo/database — no threshold (integration only; coverage collected)
+      #   @repo/ui       — lines/functions/statements ≥ 85%, branches ≥ 75%
+      #   @repo/web      — lines/functions/statements ≥ 75%, branches ≥ 65%
+      #
+      # Any threshold breach causes Vitest to exit 1 → Turbo exits 1 →
+      # this step fails → the job fails → PR merge is blocked.
+      # The `-- --coverage` flag is passed through Turbo to each vitest CLI.
+      - name: Run tests with coverage (turbo run test)
+        run: pnpm test -- --coverage
+        env:
+          # ── packages/database integration tests ────────────────────────
+          DATABASE_TEST_URL: postgresql://ci:ci@localhost:5432/ci_test
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci_test
+          # ── apps/web (proxy.test.ts, use-audio-recorder.test.ts) ───────
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          # ── packages/trpc (AI service is vi.mocked; stub prevents guard) ─
+          GEMINI_API_KEY: "ci-stub-gemini-key"
+          AUTH_GITHUB_ID: ${{ secrets.AUTH_GITHUB_ID }}
+          AUTH_GITHUB_SECRET: ${{ secrets.AUTH_GITHUB_SECRET }}
+
+      # ── 10. Upload coverage artifacts ─────────────────────────────────────
+      # Runs even if the test step failed (if: always()) so we can inspect
+      # partial coverage when diagnosing a threshold breach.
+      # All four coverage/ directories are bundled into a single artifact.
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/trpc/coverage/
+            packages/database/coverage/
+            packages/ui/coverage/
+            apps/web/coverage/
+          retention-days: 7
+          # Warn (not fail) if a package produced no coverage — e.g. if DB
+          # tests were legitimately skipped due to a missing service.
+          if-no-files-found: warn
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 2 — End-to-End Tests (Playwright / Chromium)
+  # ═══════════════════════════════════════════════════════════════════════════
+  test-e2e:
+    name: "E2E Tests (Playwright)"
+    runs-on: ubuntu-24.04
+    # Intentionally has NO dependency on test-unit. Both jobs start the moment
+    # the workflow is triggered and run on separate runners in parallel,
+    # minimising total wall-clock time before the PR gate resolves.
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. Node.js ────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ── 3. pnpm ───────────────────────────────────────────────────────────
+      - name: Set up pnpm ${{ env.PNPM_VERSION }}
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      # ── 4. pnpm store cache ───────────────────────────────────────────────
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      # ── 5. Install all workspace dependencies ─────────────────────────────
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── 6. Playwright browser version detection ───────────────────────────
+      # Extract the exact resolved @playwright/test version from the lockfile
+      # so the browser cache key is precise. A version bump busts the cache
+      # automatically without any manual intervention.
+      - name: Detect Playwright version for cache key
+        id: pw-version
+        shell: bash
+        run: |
+          # pnpm list outputs JSON; jq extracts the resolved version.
+          VERSION=$(pnpm list --filter @repo/web @playwright/test --json 2>/dev/null \
+            | jq -r '.[0].devDependencies["@playwright/test"].version // "unknown"')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Playwright version: ${VERSION}"
+
+      # ── 7. Playwright browser cache ───────────────────────────────────────
+      # ~/.cache/ms-playwright contains browser executables (~130 MB for
+      # Chromium headless shell). Caching saves 20–60s per run.
+      # No restore-keys: partial browser caches are unusable and cause cryptic
+      # launch failures, so we only accept exact version hits.
+      - name: Restore Playwright browser cache
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      # ── 8. Install browsers + system dependencies (cache miss) ───────────
+      # Full install on the first run for a given Playwright version.
+      # `--with-deps` installs OS system libraries (libglib, libnss, etc.)
+      # that Chromium requires on Ubuntu — these are NOT cached because they
+      # live in /usr and are managed by apt.
+      - name: Install Playwright browsers (cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: apps/web
+        run: pnpm exec playwright install chromium --with-deps
+
+      # ── 9. Install system dependencies only (cache hit) ───────────────────
+      # When the browser binaries come from cache, only the apt packages need
+      # to be (re-)installed. This takes ~5s vs ~60s for a full browser install.
+      - name: Install Playwright system dependencies (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web
+        run: pnpm exec playwright install-deps chromium
+
+      # ── 10. Turborepo local cache ─────────────────────────────────────────
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-e2e-${{ runner.os }}-${{ hashFiles('turbo.json') }}-${{ hashFiles('**/*.ts', '**/*.tsx', '**/*.json', '!**/node_modules/**', '!**/.next/**') }}
+          restore-keys: |
+            turbo-e2e-${{ runner.os }}-${{ hashFiles('turbo.json') }}-
+            turbo-e2e-${{ runner.os }}-
+
+      # ── 11. Build workspace packages ──────────────────────────────────────
+      # The Next.js dev server that playwright.config.ts webServer block
+      # spawns requires all workspace packages (@repo/ui, @repo/trpc,
+      # @repo/database) to be built first so their source-only exports resolve.
+      # apps/web itself is served by `pnpm dev` — no prod build needed.
+      - name: Build workspace packages (turbo run build)
+        run: pnpm build
+        env:
+          # Stub DB URL — the dev server needs the env var to pass the
+          # database/client.ts guard at startup, but no real DB is hit during
+          # E2E because all tRPC calls are intercepted via page.route().
+          DATABASE_URL: postgresql://ci-stub:stub@localhost:5432/stub
+          GEMINI_API_KEY: "ci-stub-gemini-key"
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          AUTH_GITHUB_ID: ${{ secrets.AUTH_GITHUB_ID }}
+          AUTH_GITHUB_SECRET: ${{ secrets.AUTH_GITHUB_SECRET }}
+
+      # ── 12. Run Playwright E2E suite ──────────────────────────────────────
+      # playwright.config.ts webServer block starts `pnpm dev`, polls
+      # http://localhost:3000 until it responds, then runs all tests.
+      #
+      # CI=true activates in playwright.config.ts:
+      #   retries:  2   (each failing test gets 2 retries before marked failed)
+      #   workers:  1   (prevents port conflicts on single-core CI runners)
+      #   reporter: github  (inline PR annotations for failing assertions)
+      #   reuseExistingServer: false  (always spawns a fresh dev server)
+      #
+      # AUTH_SECRET must be identical to what global.setup.ts uses when signing
+      # the forged JWT — the dev server validates signatures with this secret.
+      # If they differ, /api/auth/session returns {} and every authenticated
+      # test fails with "no user in session" during global.setup verification.
+      - name: Run E2E tests (playwright test)
+        working-directory: apps/web
+        env:
+          CI: "true"
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          AUTH_GITHUB_ID: ${{ secrets.AUTH_GITHUB_ID }}
+          AUTH_GITHUB_SECRET: ${{ secrets.AUTH_GITHUB_SECRET }}
+          DATABASE_URL: postgresql://ci-stub:stub@localhost:5432/stub
+          GEMINI_API_KEY: "ci-stub-gemini-key"
+        run: pnpm test:e2e
+
+      # ── 13. Upload Playwright debug artefacts (on failure only) ───────────
+      # playwright.config.ts records:
+      #   video:      "on-first-retry"   → MP4 replay of the failing run
+      #   screenshot: "only-on-failure"  → full-page PNG at point of failure
+      #   trace:      "on-first-retry"   → DOM snapshot + network log for
+      #                                    replay in `playwright show-report`
+      # All three land in test-results/ and the HTML report in playwright-report/.
+      # These are the fastest path to diagnosing flaky or broken E2E tests
+      # without re-running CI.
+      - name: Upload Playwright failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 3 — Continuous Deployment (push to main only)
+  # ═══════════════════════════════════════════════════════════════════════════
   cd:
     name: Continuous Deployment
-    runs-on: ubuntu-latest
-    needs: ci
+    runs-on: ubuntu-24.04
+    # Gate the deployment behind BOTH test jobs. The Docker image is only built
+    # and pushed when every test passes — enforces a strict quality gate before
+    # any artifact reaches production.
+    needs: [test-unit, test-e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log into Docker Hub
@@ -59,7 +398,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
+      - name: Extract Docker image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -75,5 +414,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache backend for Docker layer caching.
+          # mode=max caches all intermediate layers, not just the final image.
           cache-from: type=gha
           cache-to: type=gha,mode=max
