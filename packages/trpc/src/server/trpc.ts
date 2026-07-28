@@ -54,18 +54,25 @@ export const publicProcedure = t.procedure.use(loggerMiddleware);
 
 // ─── Auth Middleware ───────────────────────────────────────────────────────────
 
-const isAuthenticated = t.middleware(({ ctx, next }) => {
-  if (!ctx.session) {
+const isAuthed = t.middleware(({ ctx, next }) => {
+  if (!ctx.session?.user) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "You must be signed in to access this resource.",
     });
   }
-  return next({ ctx: { ...ctx, session: ctx.session } });
+  return next({
+    ctx: {
+      session: {
+        ...ctx.session,
+        user: ctx.session.user,
+      },
+    },
+  });
 });
 
 const isAdmin = t.middleware(({ ctx, next }) => {
-  if (!ctx.session) {
+  if (!ctx.session?.user) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "You must be signed in to access this resource.",
@@ -77,13 +84,20 @@ const isAdmin = t.middleware(({ ctx, next }) => {
       message: "You do not have permission to perform this action.",
     });
   }
-  return next({ ctx: { ...ctx, session: ctx.session } });
+  return next({
+    ctx: {
+      session: {
+        ...ctx.session,
+        user: ctx.session.user,
+      },
+    },
+  });
 });
 
 // ─── Protected Procedures ──────────────────────────────────────────────────────
 
 /** Requires an authenticated session. Throws UNAUTHORIZED otherwise. */
-export const protectedProcedure = t.procedure.use(isAuthenticated);
+export const protectedProcedure = t.procedure.use(isAuthed);
 
 /** Requires the authenticated user to have role = "admin". Throws FORBIDDEN otherwise. */
 export const adminProcedure = t.procedure.use(isAdmin);
