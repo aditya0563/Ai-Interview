@@ -1,7 +1,7 @@
 "use client";
 
 import Editor, { OnMount } from "@monaco-editor/react";
-import { useRef } from "react";
+import { useRef, useEffect, useCallback } from "react";
 
 export interface CodeCanvasProps {
   value?: string;
@@ -19,12 +19,30 @@ export function CodeCanvas({
   className = "",
 }: CodeCanvasProps) {
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleMount: OnMount = (editor) => {
     editorRef.current = editor;
     // Focus editor on mount for immediate typing
     editor.focus();
   };
+
+  const debouncedOnChange = useCallback((val: string | undefined) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    timeoutRef.current = setTimeout(() => {
+      onChange?.(val);
+    }, 400);
+  }, [onChange]);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -47,8 +65,8 @@ export function CodeCanvas({
         defaultLanguage={language}
         language={language}
         theme="vs-dark"
-        value={value}
-        onChange={onChange}
+        defaultValue={value}
+        onChange={debouncedOnChange}
         onMount={handleMount}
         options={{
           minimap: { enabled: false },

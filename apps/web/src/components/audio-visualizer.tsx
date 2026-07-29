@@ -10,6 +10,7 @@ interface AudioVisualizerProps {
 }
 
 const FFT_SIZE = 256;
+let sharedAudioContext: AudioContext | null = null;
 
 function getSpeechRecognitionCtor(): typeof SpeechRecognition | null {
   if (typeof window === "undefined") return null;
@@ -23,6 +24,8 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const retryCount = useRef<number>(0);
+  const lastCrashTime = useRef<number>(0);
 
   const [interimText, setInterimText] = useState<string>("");
   const [speechSupported] = useState<boolean>(() => getSpeechRecognitionCtor() !== null);
@@ -122,8 +125,22 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
   }, [stream, drawIdle]);
 
   useEffect(() => {
-    if (stream) {
-      const audioCtx = new AudioContext();
+    let isActive = true;
+
+    async function setupAudio() {
+      if (!stream) return;
+
+      if (!sharedAudioContext) {
+        sharedAudioContext = new AudioContext();
+      }
+
+      if (sharedAudioContext.state === "suspended") {
+        await sharedAudioContext.resume();
+      }
+
+      if (!isActive) return;
+
+      const audioCtx = sharedAudioContext;
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = FFT_SIZE;
       analyser.smoothingTimeConstant = 0.8;
@@ -172,6 +189,20 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
 
         recognition.onend = () => {
           if (recognitionRef.current === recognition && stream) {
+            const now = Date.now();
+            if (now - lastCrashTime.current < 5000) {
+              retryCount.current += 1;
+            } else {
+              retryCount.current = 0;
+            }
+            
+            lastCrashTime.current = now;
+
+            if (retryCount.current >= 3) {
+              alert("Speech recognition disconnected. Please check your microphone permissions and refresh.");
+              return;
+            }
+
             try { recognition.start(); } catch {}
           }
         };
@@ -181,7 +212,10 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
           recognitionRef.current = recognition;
         } catch {}
       }
+    }
 
+    if (stream) {
+      setupAudio();
     } else {
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
@@ -194,19 +228,22 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
       }
       setInterimText("");
       
-      sourceRef.current?.disconnect();
-      sourceRef.current = null;
-      analyserRef.current = null;
-      
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close().catch(() => {});
-        audioCtxRef.current = null;
+      if (sourceRef.current) {
+        sourceRef.current.disconnect();
+        sourceRef.current = null;
       }
+      if (analyserRef.current) {
+        analyserRef.current.disconnect();
+        analyserRef.current = null;
+      }
+      
+      audioCtxRef.current = null;
       
       drawIdle();
     }
     
     return () => {
+      isActive = false;
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -216,10 +253,15 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
         recognitionRef.current = null;
         try { recognition.stop(); } catch {}
       }
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close().catch(() => {});
-        audioCtxRef.current = null;
+      if (sourceRef.current) {
+        sourceRef.current.disconnect();
+        sourceRef.current = null;
       }
+      if (analyserRef.current) {
+        analyserRef.current.disconnect();
+        analyserRef.current = null;
+      }
+      audioCtxRef.current = null;
     };
   }, [stream, drawWaveform, drawIdle]);
 

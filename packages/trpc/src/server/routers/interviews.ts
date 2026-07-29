@@ -1,9 +1,9 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { interviews } from "@repo/database";
+import { interviews, interviewMessages } from "@repo/database";
 import { aiProcedure, protectedProcedure, router } from "../trpc";
-import { generateInterviewResponse } from "../services/ai";
+import { processInterviewAnswer } from "../services/interviews";
 
 export const interviewsRouter = router({
   create: protectedProcedure
@@ -25,58 +25,63 @@ export const interviewsRouter = router({
     }),
 
   getById: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().cuid2() }))
     .query(async ({ ctx, input }) => {
-      const rows = await ctx.db
-        .select()
-        .from(interviews)
-        .where(
-          and(
-            eq(interviews.id, input.id),
-            eq(interviews.userId, ctx.session.user.id)
-          )
-        );
+      const row = await ctx.db.query.interviews.findFirst({
+        where: and(
+          eq(interviews.id, input.id),
+          eq(interviews.userId, ctx.session.user.id)
+        ),
+        with: {
+          messages: true,
+          snapshots: true,
+        },
+      });
 
-      if (rows.length === 0) {
+      if (!row) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Resource not found",
         });
       }
 
-      return rows;
+      return row;
     }),
 
   addTranscriptMessage: protectedProcedure
     .input(
       z.object({
-        interviewId: z.string().uuid(),
+        interviewId: z.string().cuid2(),
         message: z.object({
-          role: z.string().trim(),
+          role: z.enum(["user", "assistant", "system"]),
           content: z.string().trim().max(1000),
         }),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const rows = await ctx.db
-        .update(interviews)
-        .set({
-          transcript: sql`${interviews.transcript} || ${JSON.stringify([input.message])}::jsonb`,
-        })
-        .where(
-          and(
-            eq(interviews.id, input.interviewId),
-            eq(interviews.userId, ctx.session.user.id)
-          )
-        )
-        .returning();
+      // First ensure the interview belongs to the user
+      const row = await ctx.db.query.interviews.findFirst({
+        where: and(
+          eq(interviews.id, input.interviewId),
+          eq(interviews.userId, ctx.session.user.id)
+        ),
+      });
 
-      if (rows.length === 0) {
+      if (!row) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Resource not found",
         });
       }
+
+      const rows = await ctx.db
+        .insert(interviewMessages)
+        .values({
+          interviewId: input.interviewId,
+          role: input.message.role,
+          content: input.message.content,
+        })
+        .returning();
 
       return rows;
     }),
@@ -84,7 +89,7 @@ export const interviewsRouter = router({
   updateStatus: protectedProcedure
     .input(
       z.object({
-        interviewId: z.string().uuid(),
+        interviewId: z.string().cuid2(),
         status: z.enum(["active", "completed"]),
       })
     )
@@ -118,92 +123,18 @@ export const interviewsRouter = router({
   submitAnswer: aiProcedure
     .input(
       z.object({
-        interviewId: z.string().uuid(),
+        interviewId: z.string().cuid2(),
         message: z.string().trim().min(1, "Message cannot be empty").max(1000),
         code: z.string().trim().max(10000),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // 1. Fetch the current interview row (for jobRole + existing transcript)
-      const rows = await ctx.db
-        .select()
-        .from(interviews)
-        .where(
-          and(
-            eq(interviews.id, input.interviewId),
-            eq(interviews.userId, ctx.session.user.id)
-          )
-        );
-
-      if (rows.length === 0) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Resource not found",
-        });
-      }
-
-      const interview = rows[0]!;
-
-      // 2. Build the user message object
-      const userMessage = { role: "user", content: input.message };
-
-      // 3. Append the user message to the DB transcript
-      const update1 = await ctx.db
-        .update(interviews)
-        .set({
-          transcript: sql`${interviews.transcript} || ${JSON.stringify([userMessage])}::jsonb`,
-        })
-        .where(
-          and(
-            eq(interviews.id, input.interviewId),
-            eq(interviews.userId, ctx.session.user.id)
-          )
-        )
-        .returning();
-
-      if (update1.length === 0) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Resource not found",
-        });
-      }
-
-      // 4. Generate the AI follow-up using the full transcript (including the
-      //    new user message) and the live code snapshot
-      const updatedTranscript = [...(interview.transcript ?? []), userMessage];
-      const aiText = await generateInterviewResponse(
-        interview.jobRole,
-        updatedTranscript,
-        input.code
-      );
-
-      // 5. Build the assistant message object
-      const assistantMessage = { role: "assistant", content: aiText };
-
-      // 6. Append the AI message and return the final interview row
-      const finalUpdate = await ctx.db
-        .update(interviews)
-        .set({
-          transcript: sql`${interviews.transcript} || ${JSON.stringify([assistantMessage])}::jsonb`,
-        })
-        .where(
-          and(
-            eq(interviews.id, input.interviewId),
-            eq(interviews.userId, ctx.session.user.id)
-          )
-        )
-        .returning();
-
-      if (finalUpdate.length === 0) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Resource not found",
-        });
-      }
-
-      return {
-        aiResponse: aiText,
-        interview: finalUpdate[0]!,
-      };
+      return await processInterviewAnswer({
+        db: ctx.db,
+        userId: ctx.session.user.id,
+        interviewId: input.interviewId,
+        message: input.message,
+        code: input.code,
+      });
     }),
 });

@@ -51,7 +51,7 @@ export default async function middleware(req: NextRequest) {
 
   // 2. GLOBAL IP RATE LIMITING ─────────────────────────────────────────────────
   //    Only reached by legitimate traffic. Uses the real client IP as the key.
-  const ip = req.ip ?? "127.0.0.1";
+  const ip = req.headers.get("x-forwarded-for") ?? "127.0.0.1";
   const { success } = await globalRatelimit.limit(ip);
 
   if (!success) {
@@ -64,7 +64,7 @@ export default async function middleware(req: NextRequest) {
   // 3. AUTH.JS PAGE-LEVEL GUARD ────────────────────────────────────────────────
   //    Delegates to the existing Edge-compatible auth callback which enforces
   //    session checks for /interview/* and /admin/* routes.
-  return auth(req as Parameters<typeof auth>[0]);
+  return auth(req as any);
 }
 
 // ─── Matcher ───────────────────────────────────────────────────────────────────

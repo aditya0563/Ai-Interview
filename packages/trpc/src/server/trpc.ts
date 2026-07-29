@@ -2,6 +2,8 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { Redis } from "@upstash/redis";
 import { Ratelimit } from "@upstash/ratelimit";
 import type { DB } from "@repo/database";
+import * as Sentry from "@sentry/nextjs";
+import { logger } from "./logger";
 
 // ─── Session Types ─────────────────────────────────────────────────────────────
 // Kept framework-agnostic (no next-auth import) so this package doesn't depend
@@ -29,30 +31,48 @@ const t = initTRPC.context<Context>().create();
 export const router = t.router;
 export const createCallerFactory = t.createCallerFactory;
 
-// ─── Logger Middleware ─────────────────────────────────────────────────────────
+// ─── Observability Middleware ───────────────────────────────────────────────────
 
-const loggerMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
+const observabilityMiddleware = t.middleware(async ({ path, type, next, ctx }) => {
   const start = performance.now();
   const result = await next();
-  const end = performance.now();
-  const durationMs = end - start;
+  const durationMs = Number((performance.now() - start).toFixed(2));
 
   const logData = {
-    severity: durationMs > 1500 ? "WARN" : "INFO",
     path,
     type,
     status: result.ok ? "ok" : "error",
-    durationMs: Number(durationMs.toFixed(2)),
-    userId: ctx.session?.user.id,
+    durationMs,
+    userId: ctx.session?.user?.id,
   };
 
-  console.log(JSON.stringify(logData));
+  if (result.ok) {
+    if (durationMs > 1500) {
+      logger.warn(logData, "Slow tRPC request detected");
+    } else {
+      logger.info(logData, "tRPC request completed");
+    }
+  } else {
+    logger.error({ ...logData, error: result.error.message }, "tRPC request failed");
+
+    // Capture unhandled 500 errors to Sentry
+    if (result.error.code === "INTERNAL_SERVER_ERROR") {
+      Sentry.withScope((scope) => {
+        scope.setTag("trpc.path", path);
+        scope.setTag("trpc.type", type);
+        if (ctx.session?.user) {
+          scope.setUser({ id: ctx.session.user.id });
+        }
+        Sentry.captureException(result.error);
+      });
+    }
+  }
 
   return result;
 });
 
 /** Open to everyone — no auth required. */
-export const publicProcedure = t.procedure.use(loggerMiddleware);
+export const publicProcedure = t.procedure.use(observabilityMiddleware);
 
 // ─── Auth Middleware ───────────────────────────────────────────────────────────
 

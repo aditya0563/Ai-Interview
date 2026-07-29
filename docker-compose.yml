@@ -13,17 +13,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  redis:
+    image: redis:7-alpine
     ports:
-      - "3000:3000"
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:password@postgres:5432/interview_ai}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-    depends_on:
-      - postgres
+      - "6379:6379"
     restart: unless-stopped
 
 volumes:

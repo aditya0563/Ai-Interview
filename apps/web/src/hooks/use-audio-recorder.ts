@@ -11,17 +11,26 @@ export function useAudioRecorder() {
   const startRecording = useCallback(async () => {
     setError(null);
     try {
+      if (!navigator || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Microphone access is unavailable. Please ensure you are using HTTPS and a modern browser.");
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
       const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = mediaStream;
       setStream(mediaStream);
       setIsRecording(true);
     } catch (err: unknown) {
-      const msg =
-        err instanceof DOMException
-          ? err.name === "NotAllowedError"
-            ? "Microphone permission was denied."
-            : err.message
-          : "Unable to access the microphone.";
+      let msg = "Unable to access the microphone.";
+      if (err instanceof DOMException) {
+        msg = err.name === "NotAllowedError"
+          ? "Microphone permission was denied."
+          : err.message;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       setError(msg);
       setIsRecording(false);
     }

@@ -9,23 +9,25 @@
   },
   "scripts": {
     "lint": "tsc --noEmit",
-    "db:push": "drizzle-kit push",
-    "db:migrate": "drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "build": "echo 'No compile step — consumed as TS source'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^3.3.0",
     "drizzle-orm": "^0.41.0",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^20",
+    "@vitest/coverage-v8": "^2.0.0",
     "drizzle-kit": "^0.31.0",
+    "tsx": "^4.7.1",
     "typescript": "^5",
-    "vitest": "^2.0.0",
-    "@vitest/coverage-v8": "^2.0.0"
+    "vitest": "^2.0.0"
   }
 }

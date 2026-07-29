@@ -31,3 +31,7 @@ Thumbs.db
 
 # Local scratchpad (temporary files, experiments — never commit)
 .scratch/
+
+# Test artifacts
+playwright-report/
+test-results/

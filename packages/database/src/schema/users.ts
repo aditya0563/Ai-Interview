@@ -5,7 +5,11 @@ import {
   primaryKey,
   text,
   timestamp,
+  index,
 } from "drizzle-orm/pg-core";
+import { createId } from "@paralleldrive/cuid2";
+import { relations } from "drizzle-orm";
+import { interviews } from "./interviews";
 
 // ─── Role Enum ────────────────────────────────────────────────────────────────
 
@@ -16,12 +20,14 @@ export const roleEnum = pgEnum("role", ["user", "admin"]);
 export const users = pgTable("users", {
   id: text("id")
     .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
+    .$defaultFn(() => createId()),
   name: text("name"),
   email: text("email").notNull().unique(),
   emailVerified: timestamp("email_verified", { mode: "date" }),
   image: text("image"),
   role: roleEnum("role").notNull().default("user"),
+  updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()),
+  deletedAt: timestamp("deleted_at"),
 });
 
 export const accounts = pgTable(
@@ -29,7 +35,7 @@ export const accounts = pgTable(
   {
     userId: text("user_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => users.id),
     type: text("type").notNull(),
     provider: text("provider").notNull(),
     providerAccountId: text("provider_account_id").notNull(),
@@ -40,9 +46,12 @@ export const accounts = pgTable(
     scope: text("scope"),
     id_token: text("id_token"),
     session_state: text("session_state"),
+    updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()),
+    deletedAt: timestamp("deleted_at"),
   },
-  (account) => [
-    primaryKey({ columns: [account.provider, account.providerAccountId] }),
+  (table) => [
+    primaryKey({ columns: [table.provider, table.providerAccountId] }),
+    index("account_user_id_idx").on(table.userId),
   ]
 );
 
@@ -50,9 +59,13 @@ export const sessions = pgTable("sessions", {
   sessionToken: text("session_token").primaryKey(),
   userId: text("user_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => users.id),
   expires: timestamp("expires", { mode: "date" }).notNull(),
-});
+  updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()),
+  deletedAt: timestamp("deleted_at"),
+}, (table) => [
+  index("session_user_id_idx").on(table.userId),
+]);
 
 export const verificationTokens = pgTable(
   "verification_tokens",
@@ -60,9 +73,33 @@ export const verificationTokens = pgTable(
     identifier: text("identifier").notNull(),
     token: text("token").notNull(),
     expires: timestamp("expires", { mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()),
+    deletedAt: timestamp("deleted_at"),
   },
-  (vt) => [primaryKey({ columns: [vt.identifier, vt.token] })]
+  (table) => [primaryKey({ columns: [table.identifier, table.token] })]
 );
+
+// ─── Relations ────────────────────────────────────────────────────────────────
+
+export const usersRelations = relations(users, ({ many }) => ({
+  accounts: many(accounts),
+  sessions: many(sessions),
+  interviews: many(interviews),
+}));
+
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

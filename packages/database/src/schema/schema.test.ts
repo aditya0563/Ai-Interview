@@ -24,6 +24,8 @@ import {
   accounts,
   sessions,
   interviews,
+  interviewMessages,
+  interviewCodeSnapshots,
   reports,
 } from "../schema";
 
@@ -53,6 +55,8 @@ afterAll(async () => {
 // Delete in FK-safe order after every test so state never bleeds between cases.
 afterEach(async () => {
   await db.delete(reports);
+  await db.delete(interviewCodeSnapshots);
+  await db.delete(interviewMessages);
   await db.delete(interviews);
   await db.delete(accounts);
   await db.delete(sessions);
@@ -140,17 +144,13 @@ describe("users table", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("cascades delete to interviews on user removal", async () => {
+  it("restricts delete on user if they have interviews (no cascade)", async () => {
     const user = await seedUser();
     await seedInterview(user.id);
 
-    await db.delete(users).where(eq(users.id, user.id));
-
-    const orphanedInterviews = await db
-      .select()
-      .from(interviews)
-      .where(eq(interviews.userId, user.id));
-    expect(orphanedInterviews).toHaveLength(0);
+    await expect(
+      db.delete(users).where(eq(users.id, user.id))
+    ).rejects.toThrow();
   });
 });
 
@@ -159,28 +159,59 @@ describe("users table", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("interviews table", () => {
-  it("inserts an interview with default empty transcript", async () => {
+  it("inserts an interview", async () => {
     const user = await seedUser();
     const interview = await seedInterview(user.id);
 
     expect(interview.id).toBeTypeOf("string");
     expect(interview.status).toBe("active");
-    expect(interview.transcript).toEqual([]);
     expect(interview.createdAt).toBeInstanceOf(Date);
   });
 
-  it("stores and retrieves a JSONB transcript", async () => {
+  it("stores and retrieves interview messages", async () => {
     const user = await seedUser();
-    const transcript = [
-      { role: "assistant", content: "Tell me about yourself." },
-      { role: "user", content: "I am a full-stack engineer." },
-    ];
-    const [interview] = await db
-      .insert(interviews)
-      .values({ userId: user.id, jobRole: "Engineer", transcript })
-      .returning();
+    const interview = await seedInterview(user.id);
 
-    expect(interview!.transcript).toEqual(transcript);
+    await db.insert(interviewMessages).values({
+      interviewId: interview.id,
+      role: "assistant",
+      content: "Tell me about yourself.",
+    });
+
+    await db.insert(interviewMessages).values({
+      interviewId: interview.id,
+      role: "user",
+      content: "I am a full-stack engineer.",
+    });
+
+    const messages = await db
+      .select()
+      .from(interviewMessages)
+      .where(eq(interviewMessages.interviewId, interview.id));
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]!.role).toBe("assistant");
+    expect(messages[1]!.role).toBe("user");
+  });
+  
+  it("stores and retrieves interview code snapshots", async () => {
+    const user = await seedUser();
+    const interview = await seedInterview(user.id);
+
+    await db.insert(interviewCodeSnapshots).values({
+      interviewId: interview.id,
+      code: "console.log('hello world');",
+      language: "typescript",
+    });
+
+    const snapshots = await db
+      .select()
+      .from(interviewCodeSnapshots)
+      .where(eq(interviewCodeSnapshots.interviewId, interview.id));
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.code).toBe("console.log('hello world');");
+    expect(snapshots[0]!.language).toBe("typescript");
   });
 
   it("updates status from active to completed", async () => {
@@ -205,7 +236,7 @@ describe("interviews table", () => {
     ).rejects.toThrow();
   });
 
-  it("cascades delete to reports on interview removal", async () => {
+  it("restricts delete on interview if it has reports (no cascade)", async () => {
     const user = await seedUser();
     const interview = await seedInterview(user.id);
 
@@ -217,13 +248,9 @@ describe("interviews table", () => {
       detailedFeedback: "Good.",
     });
 
-    await db.delete(interviews).where(eq(interviews.id, interview.id));
-
-    const orphanedReports = await db
-      .select()
-      .from(reports)
-      .where(eq(reports.interviewId, interview.id));
-    expect(orphanedReports).toHaveLength(0);
+    await expect(
+      db.delete(interviews).where(eq(interviews.id, interview.id))
+    ).rejects.toThrow();
   });
 
   it("selects all interviews for a specific userId", async () => {
@@ -295,21 +322,6 @@ describe("reports table", () => {
     expect(report!.improvements).toEqual(improvements);
   });
 
-  it("enforces FK — interviewId must exist in interviews", async () => {
-    await expect(
-      db
-        .insert(reports)
-        .values({
-          interviewId: "00000000-0000-0000-0000-000000000000",
-          overallScore: 50,
-          technicalScore: 50,
-          communicationScore: 50,
-          detailedFeedback: "Orphan report",
-        })
-        .returning()
-    ).rejects.toThrow();
-  });
-
   it("queries reports by interviewId", async () => {
     const user = await seedUser();
     const interviewA = await seedInterview(user.id);
@@ -348,26 +360,5 @@ describe("reports table", () => {
       .from(reports)
       .where(eq(reports.interviewId, interviewB.id));
     expect(reportsB).toHaveLength(1);
-  });
-
-  it("three-level cascade: delete user → interviews and reports are removed", async () => {
-    const user = await seedUser();
-    const interview = await seedInterview(user.id);
-    await db.insert(reports).values({
-      interviewId: interview.id,
-      overallScore: 50,
-      technicalScore: 50,
-      communicationScore: 50,
-      detailedFeedback: "Should be cascade deleted.",
-    });
-
-    // Delete the root user — cascades to interviews → reports
-    await db.delete(users).where(eq(users.id, user.id));
-
-    const survivingReports = await db
-      .select()
-      .from(reports)
-      .where(eq(reports.interviewId, interview.id));
-    expect(survivingReports).toHaveLength(0);
   });
 });

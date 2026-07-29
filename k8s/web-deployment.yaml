@@ -14,6 +14,13 @@ spec:
       labels:
         app: web
     spec:
+      initContainers:
+        - name: db-migrator
+          image: interview-ai-web:latest
+          command: ["npm", "run", "db:migrate"]
+          envFrom:
+            - secretRef:
+                name: interview-ai-secrets
       containers:
         - name: web
           image: interview-ai-web:latest # Replace with your actual image registry and tag in CI/CD
@@ -36,15 +43,40 @@ spec:
                 secretKeyRef:
                   name: interview-ai-secrets
                   key: GEMINI_API_KEY
+            - name: UPSTASH_REDIS_REST_URL
+              valueFrom:
+                secretKeyRef:
+                  name: interview-ai-secrets
+                  key: UPSTASH_REDIS_REST_URL
+            - name: UPSTASH_REDIS_REST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: interview-ai-secrets
+                  key: UPSTASH_REDIS_REST_TOKEN
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: interview-ai-secrets
+                  key: AUTH_SECRET
+            - name: AUTH_GITHUB_ID
+              valueFrom:
+                secretKeyRef:
+                  name: interview-ai-secrets
+                  key: AUTH_GITHUB_ID
+            - name: AUTH_GITHUB_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: interview-ai-secrets
+                  key: AUTH_GITHUB_SECRET
           livenessProbe:
             httpGet:
-              path: /api/trpc
+              path: /api/trpc/health
               port: 3000
             initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /api/trpc
+              path: /api/trpc/health
               port: 3000
             initialDelaySeconds: 10
             periodSeconds: 10
