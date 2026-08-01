@@ -1,6 +1,5 @@
 import type { NextConfig } from "next";
 import path from "path";
-import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@repo/ui", "@repo/trpc", "@repo/database"],
@@ -10,6 +9,4 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, "../../"),
 };
 
-export default withSentryConfig(nextConfig, {
-  autoInstrumentMiddleware: false,
-});
+export default nextConfig;
