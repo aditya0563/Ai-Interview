@@ -35,9 +35,9 @@ const INITIAL_MESSAGES: Message[] = [
   },
 ];
 
-// Placeholder interview ID used until session management is wired up.
-// Replace this with a real UUID once the create-interview flow exists.
-const DEMO_INTERVIEW_ID = "00000000-0000-0000-0000-000000000001";
+// Placeholder interview ID (must be a valid CUID2) used until session management is wired up.
+// Replace this with a real CUID2 once the create-interview flow exists.
+const DEMO_INTERVIEW_ID = "tz4a98xxat96iws9zvli330b";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
