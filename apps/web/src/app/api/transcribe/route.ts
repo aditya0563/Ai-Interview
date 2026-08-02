@@ -34,11 +34,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert the file blob into a node buffer using arrayBuffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    // Make a fetch request to the Deepgram API endpoint
+    // Make a fetch request to the Deepgram API endpoint, passing the raw Blob
     const deepgramUrl =
       "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true";
 
@@ -48,7 +44,7 @@ export async function POST(request: NextRequest) {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
         "Content-Type": "audio/webm",
       },
-      body: buffer as unknown as BodyInit,
+      body: file,
     });
 
     if (!response.ok) {
@@ -57,7 +53,10 @@ export async function POST(request: NextRequest) {
         `Deepgram API error (${response.status}):`,
         errorText
       );
-      throw new Error(`Deepgram API failed with status ${response.status}`);
+      return NextResponse.json(
+        { error: errorText },
+        { status: 500 }
+      );
     }
 
     // Parse the response and extract the transcript from results -> channels -> alternatives -> transcript
@@ -67,11 +66,11 @@ export async function POST(request: NextRequest) {
 
     // Return the extracted text using NextResponse
     return NextResponse.json({ transcript });
-  } catch (error) {
-    console.error("Transcription route error:", error);
+  } catch (error: any) {
+    console.error("Transcription route error:", error?.message || error);
     // Return a 500 status code if the transcription fails
     return NextResponse.json(
-      { error: "Internal server error during transcription" },
+      { error: error?.message || "Internal server error during transcription" },
       { status: 500 }
     );
   }
