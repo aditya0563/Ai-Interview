@@ -20,6 +20,15 @@
         "NEXT_PUBLIC_SENTRY_DSN"
       ]
     },
+    "@repo/database#build": {
+      "outputs": []
+    },
+    "@repo/trpc#build": {
+      "outputs": []
+    },
+    "@repo/ui#build": {
+      "outputs": []
+    },
     "dev": {
       "cache": false,
       "persistent": true
