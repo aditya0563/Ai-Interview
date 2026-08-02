@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CodeCanvas } from "@/components/code-canvas";
 import { AudioVisualizer } from "@/components/audio-visualizer";
-import { useAudioRecorder } from "@/hooks/use-audio-recorder";
 import { trpc } from "@/trpc/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -43,7 +42,13 @@ const DEMO_INTERVIEW_ID = "00000000-0000-0000-0000-000000000001";
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function InterviewPage() {
-  const { isRecording, stream, error: micError, startRecording, stopRecording } = useAudioRecorder();
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Code editor state
   const [code, setCode] = useState<string | undefined>(STARTER_CODE);
@@ -74,14 +79,12 @@ export default function InterviewPage() {
     },
   });
 
-  /** Populate the chat input with transcribed speech.
-   *  Final results replace any pending interim text; interim results update
-   *  the field in real time so the user can see what's being recognised. */
-  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
-    setChatInput(text);
-
-    if (isFinal && text.trim()) {
+  const handleFinalTranscript = useCallback(
+    (text: string) => {
+      if (!text || !text.trim()) return;
       const trimmed = text.trim();
+      setChatInput(trimmed);
+
       if (submitAnswer.isPending) return;
 
       // Optimistic update
@@ -99,8 +102,126 @@ export default function InterviewPage() {
         message: trimmed,
         code: code ?? "",
       });
+    },
+    [code, submitAnswer]
+  );
+
+  const handleFinalTranscriptRef = useRef(handleFinalTranscript);
+  useEffect(() => {
+    handleFinalTranscriptRef.current = handleFinalTranscript;
+  }, [handleFinalTranscript]);
+
+  const startRecording = useCallback(async () => {
+    setMicError(null);
+    audioChunksRef.current = [];
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "Microphone access is unavailable. Please ensure you are using HTTPS and a modern browser."
+        );
+      }
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      setStream(mediaStream);
+
+      const options: MediaRecorderOptions = {};
+      if (typeof MediaRecorder.isTypeSupported === "function") {
+        if (MediaRecorder.isTypeSupported("audio/webm")) {
+          options.mimeType = "audio/webm";
+        } else if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+          options.mimeType = "audio/webm;codecs=opus";
+        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+          options.mimeType = "audio/mp4";
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(mediaStream, options);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+        audioChunksRef.current = [];
+
+        try {
+          setIsTranscribing(true);
+          const formData = new FormData();
+          formData.append("file", audioBlob, "recording.webm");
+
+          const response = await fetch("/api/transcribe", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server error (${response.status}) during transcription`);
+          }
+
+          const data = await response.json();
+          const transcript = data?.transcript ?? "";
+
+          if (transcript && typeof transcript === "string") {
+            handleFinalTranscriptRef.current(transcript);
+          }
+        } catch (error) {
+          console.error("Error transcribing audio:", error);
+          setMicError("Failed to transcribe speech. Please try again.");
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorder.start(250);
+      setIsRecording(true);
+    } catch (err: unknown) {
+      let msg = "Unable to access the microphone.";
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        msg = "Microphone permission was denied.";
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
+      setMicError(msg);
+      setIsRecording(false);
     }
-  }, [code, submitAnswer]);
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    setStream((prevStream) => {
+      if (prevStream) {
+        prevStream.getTracks().forEach((track) => track.stop());
+      }
+      return null;
+    });
+    setIsRecording(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
+        mediaRecorderRef.current.stop();
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [stream]);
 
   // Scroll anchor for the messages list
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -201,19 +322,24 @@ export default function InterviewPage() {
                     Interview Session
                   </h3>
                   <p className="text-[10px] text-white/40">
-                    {isRecording ? "Recording active" : "Ready to start"}
+                    {isRecording
+                      ? "Recording active"
+                      : isTranscribing
+                        ? "Transcribing audio..."
+                        : "Ready to start"}
                   </p>
                 </div>
               </div>
-              
+
               {!isRecording ? (
                 <button
                   onClick={startRecording}
-                  className="group relative overflow-hidden rounded-lg bg-violet-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all hover:scale-105 hover:bg-violet-500 active:scale-95"
+                  disabled={isTranscribing}
+                  className="group relative overflow-hidden rounded-lg bg-violet-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all hover:scale-105 hover:bg-violet-500 active:scale-95 disabled:pointer-events-none disabled:opacity-50"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:animate-[shimmer_1.5s_infinite]" />
                   <span className="relative flex items-center gap-2">
-                    Start Interview
+                    {isTranscribing ? "Transcribing..." : "Start Interview"}
                   </span>
                 </button>
               ) : (
@@ -270,8 +396,7 @@ export default function InterviewPage() {
             </div>
           </div>
 
-          {/* Audio Visualizer */}
-          <AudioVisualizer stream={stream} onTranscript={handleTranscript} />
+          <AudioVisualizer stream={stream} />
 
           {/* Chat Panel */}
           <div

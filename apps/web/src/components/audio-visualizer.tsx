@@ -1,39 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 type VisualizerState = "idle" | "active";
 
 interface AudioVisualizerProps {
   stream: MediaStream | null;
-  onTranscript?: (text: string, isFinal: boolean) => void;
 }
 
 const FFT_SIZE = 256;
 let sharedAudioContext: AudioContext | null = null;
 
-function getSpeechRecognitionCtor(): typeof SpeechRecognition | null {
-  if (typeof window === "undefined") return null;
-  return (window.SpeechRecognition ?? window.webkitSpeechRecognition) ?? null;
-}
-
-export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) {
+export function AudioVisualizer({ stream }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const rafIdRef = useRef<number | null>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const retryCount = useRef<number>(0);
-  const lastCrashTime = useRef<number>(0);
-
-  const [interimText, setInterimText] = useState<string>("");
-  const [speechSupported] = useState<boolean>(() => getSpeechRecognitionCtor() !== null);
-
-  const onTranscriptRef = useRef(onTranscript);
-  useEffect(() => {
-    onTranscriptRef.current = onTranscript;
-  }, [onTranscript]);
 
   const drawIdle = useCallback(() => {
     const canvas = canvasRef.current;
@@ -153,65 +136,6 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
       sourceRef.current = source;
 
       rafIdRef.current = requestAnimationFrame(drawWaveform);
-
-      const Ctor = getSpeechRecognitionCtor();
-      if (Ctor) {
-        const recognition = new Ctor();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = "en-US";
-
-        recognition.onresult = (event: SpeechRecognitionEvent) => {
-          let interim = "";
-          let finalSegment = "";
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const result = event.results[i];
-            if (!result) continue;
-            const transcript = result[0]?.transcript ?? "";
-            if (result.isFinal) {
-              finalSegment += transcript;
-            } else {
-              interim += transcript;
-            }
-          }
-          setInterimText(interim);
-          const textToEmit = finalSegment || interim;
-          if (textToEmit) {
-            onTranscriptRef.current?.(textToEmit, !!finalSegment);
-          }
-        };
-
-        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-          if (event.error !== "no-speech") {
-            console.warn("[SpeechRecognition] error:", event.error);
-          }
-        };
-
-        recognition.onend = () => {
-          if (recognitionRef.current === recognition && stream) {
-            const now = Date.now();
-            if (now - lastCrashTime.current < 5000) {
-              retryCount.current += 1;
-            } else {
-              retryCount.current = 0;
-            }
-            
-            lastCrashTime.current = now;
-
-            if (retryCount.current >= 3) {
-              alert("Speech recognition disconnected. Please check your microphone permissions and refresh.");
-              return;
-            }
-
-            try { recognition.start(); } catch {}
-          }
-        };
-
-        try {
-          recognition.start();
-          recognitionRef.current = recognition;
-        } catch {}
-      }
     }
 
     if (stream) {
@@ -221,13 +145,6 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
       }
-      if (recognitionRef.current) {
-        const recognition = recognitionRef.current;
-        recognitionRef.current = null;
-        try { recognition.stop(); } catch {}
-      }
-      setInterimText("");
-      
       if (sourceRef.current) {
         sourceRef.current.disconnect();
         sourceRef.current = null;
@@ -236,22 +153,17 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
         analyserRef.current.disconnect();
         analyserRef.current = null;
       }
-      
+
       audioCtxRef.current = null;
-      
+
       drawIdle();
     }
-    
+
     return () => {
       isActive = false;
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
-      }
-      if (recognitionRef.current) {
-        const recognition = recognitionRef.current;
-        recognitionRef.current = null;
-        try { recognition.stop(); } catch {}
       }
       if (sourceRef.current) {
         sourceRef.current.disconnect();
@@ -296,12 +208,6 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
               Live
             </span>
           )}
-
-          {!!stream && !speechSupported && (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-medium text-amber-400">
-              STT unavailable
-            </span>
-          )}
         </div>
       </div>
 
@@ -316,22 +222,6 @@ export function AudioVisualizer({ stream, onTranscript }: AudioVisualizerProps) 
         }
         role="img"
       />
-
-      {!!stream && speechSupported && (
-        <div
-          aria-live="polite"
-          aria-label="Live speech transcript"
-          className="min-h-[1.5rem] rounded-lg border border-white/5 bg-white/5 px-3 py-1.5"
-        >
-          {interimText ? (
-            <p className="text-[10px] italic leading-relaxed text-violet-300/70">
-              {interimText}
-            </p>
-          ) : (
-            <p className="text-[10px] text-white/20">Listening…</p>
-          )}
-        </div>
-      )}
     </div>
   );
 }
